@@ -5,10 +5,11 @@
  *      Author: pcbreflux
  */
 #include "sdkconfig.h"
-#if defined(CONFIG_BT_ENABLED)
+#if defined(CONFIG_BLUEDROID_ENABLED)
 #include <string.h>
-#include <esp_log.h>
+
 #include "BLEEddystoneURL.h"
+#include "esp_log.h"
 
 static const char LOG_TAG[] = "BLEEddystoneURL";
 
@@ -118,7 +119,7 @@ std::string BLEEddystoneURL::getDecodedURL() {
  */
 void BLEEddystoneURL::setData(std::string data) {
 	if (data.length() > sizeof(m_eddystoneData)) {
-		ESP_LOGE(LOG_TAG, "Unable to set the data ... length passed in was %d and max expected %d", data.length(), sizeof(m_eddystoneData));
+		ESP_LOGE("","Unable to set the data ... length passed in was %d and max expected %d", data.length(), sizeof(m_eddystoneData));
 		return;
 	}
 	memset(&m_eddystoneData, 0, sizeof(m_eddystoneData));
@@ -136,7 +137,7 @@ void BLEEddystoneURL::setPower(int8_t advertisedTxPower) {
 
 void BLEEddystoneURL::setURL(std::string url) {
   if (url.length() > sizeof(m_eddystoneData.url)) {
-	ESP_LOGE(LOG_TAG, "Unable to set the url ... length passed in was %d and max expected %d", url.length(), sizeof(m_eddystoneData.url));
+	ESP_LOGE("","Unable to set the url ... length passed in was %d and max expected %d", url.length(), sizeof(m_eddystoneData.url));
 	return;
   }
   memset(m_eddystoneData.url, 0, sizeof(m_eddystoneData.url));

@@ -5,7 +5,7 @@
  *      Author: kolban
  */
 #include "sdkconfig.h"
-#if defined(CONFIG_BT_ENABLED)
+#if defined(CONFIG_BLUEDROID_ENABLED)
 #include <esp_bt.h>
 #include <esp_bt_main.h>
 #include <esp_gap_ble_api.h>
@@ -18,13 +18,6 @@
 #include <sstream>
 #include <unordered_set>
 #include "BLEDevice.h"
-#if defined(ARDUINO_ARCH_ESP32) && defined(CONFIG_ARDUHAL_ESP_LOG)
-#include "esp32-hal-log.h"
-#define LOG_TAG ""
-#else
-#include "esp_log.h"
-static const char* LOG_TAG = "BLEClient";
-#endif
 
 
 /*
@@ -75,14 +68,14 @@ BLEClient::~BLEClient() {
  *
  */
 void BLEClient::clearServices() {
-	ESP_LOGD(LOG_TAG, ">> clearServices");
+	ESP_LOGV("",">> clearServices");
 	// Delete all the services.
 	for (auto &myPair : m_servicesMap) {
 	   delete myPair.second;
 	}
 	m_servicesMap.clear();
 	m_haveServices = false;
-	ESP_LOGD(LOG_TAG, "<< clearServices");
+	ESP_LOGV("","<< clearServices");
 } // clearServices
 
 /**
@@ -100,7 +93,7 @@ bool BLEClient::connect(BLEAdvertisedDevice* device) {
  * @return True on success.
  */
 bool BLEClient::connect(BLEAddress address, esp_ble_addr_type_t type) {
-	ESP_LOGD(LOG_TAG, ">> connect(%s)", address.toString().c_str());
+	ESP_LOGV("",">> connect(%s)", address.toString().c_str());
 
 // We need the connection handle that we get from registering the application.  We register the app
 // and then block on its completion.  When the event has arrived, we will have the handle.
@@ -111,7 +104,8 @@ bool BLEClient::connect(BLEAddress address, esp_ble_addr_type_t type) {
 	// clearServices(); // we dont need to delete services since every client is unique?
 	esp_err_t errRc = ::esp_ble_gattc_app_register(m_appId);
 	if (errRc != ESP_OK) {
-		ESP_LOGE(LOG_TAG, "esp_ble_gattc_app_register: rc=%d %s", errRc, GeneralUtils::errorToString(errRc));
+		ESP_LOGE("","esp_ble_gattc_app_register: rc=%d %s", errRc, GeneralUtils::errorToString(errRc));
+		BLEDevice::removePeerDevice(m_appId, true);
 		return false;
 	}
 
@@ -128,12 +122,13 @@ bool BLEClient::connect(BLEAddress address, esp_ble_addr_type_t type) {
 		1                              // direct connection <-- maybe needs to be changed in case of direct indirect connection???
 	);
 	if (errRc != ESP_OK) {
-		ESP_LOGE(LOG_TAG, "esp_ble_gattc_open: rc=%d %s", errRc, GeneralUtils::errorToString(errRc));
+		ESP_LOGE("","esp_ble_gattc_open: rc=%d %s", errRc, GeneralUtils::errorToString(errRc));
+		BLEDevice::removePeerDevice(m_appId, true);
 		return false;
 	}
 
 	uint32_t rc = m_semaphoreOpenEvt.wait("connect");   // Wait for the connection to complete.
-	ESP_LOGD(LOG_TAG, "<< connect(), rc=%d", rc==ESP_GATT_OK);
+	ESP_LOGV("","<< connect(), rc=%d", rc==ESP_GATT_OK);
 	return rc == ESP_GATT_OK;
 } // connect
 
@@ -143,13 +138,13 @@ bool BLEClient::connect(BLEAddress address, esp_ble_addr_type_t type) {
  * @return N/A.
  */
 void BLEClient::disconnect() {
-	ESP_LOGD(LOG_TAG, ">> disconnect()");
+	ESP_LOGV("",">> disconnect()");
 	esp_err_t errRc = ::esp_ble_gattc_close(getGattcIf(), getConnId());
 	if (errRc != ESP_OK) {
-		ESP_LOGE(LOG_TAG, "esp_ble_gattc_close: rc=%d %s", errRc, GeneralUtils::errorToString(errRc));
+		ESP_LOGE("","esp_ble_gattc_close: rc=%d %s", errRc, GeneralUtils::errorToString(errRc));
 		return;
 	}
-	ESP_LOGD(LOG_TAG, "<< disconnect()");
+	ESP_LOGV("","<< disconnect()");
 } // disconnect
 
 
@@ -161,14 +156,14 @@ void BLEClient::gattClientEventHandler(
 	esp_gatt_if_t             gattc_if,
 	esp_ble_gattc_cb_param_t* evtParam) {
 
-	ESP_LOGD(LOG_TAG, "gattClientEventHandler [esp_gatt_if: %d] ... %s",
+	ESP_LOGD("","gattClientEventHandler [esp_gatt_if: %d] ... %s",
 		gattc_if, BLEUtils::gattClientEventTypeToString(event).c_str());
 
 	// Execute handler code based on the type of event received.
 	switch(event) {
 
 		case ESP_GATTC_SRVC_CHG_EVT:
-			ESP_LOGI(LOG_TAG, "SERVICE CHANGED");
+			ESP_LOGI("","SERVICE CHANGED");
 			break;
 
 		case ESP_GATTC_CLOSE_EVT: {
@@ -185,16 +180,18 @@ void BLEClient::gattClientEventHandler(
 		// - uint16_t          conn_id
 		// - esp_bd_addr_t     remote_bda
 		case ESP_GATTC_DISCONNECT_EVT: {
+				if (evtParam->disconnect.conn_id != getConnId()) break;
 				// If we receive a disconnect event, set the class flag that indicates that we are
 				// no longer connected.
-				m_isConnected = false;
-				if (m_pClientCallbacks != nullptr) {
+				if (m_isConnected && m_pClientCallbacks != nullptr) {
 					m_pClientCallbacks->onDisconnect(this);
 				}
-				BLEDevice::removePeerDevice(m_appId, true);
+				m_isConnected = false;
 				esp_ble_gattc_app_unregister(m_gattc_if);
+				m_semaphoreOpenEvt.give(ESP_GATT_IF_NONE);
 				m_semaphoreRssiCmplEvt.give();
 				m_semaphoreSearchCmplEvt.give(1);
+				BLEDevice::removePeerDevice(m_appId, true);
 				break;
 		} // ESP_GATTC_DISCONNECT_EVT
 
@@ -208,11 +205,13 @@ void BLEClient::gattClientEventHandler(
 		//
 		case ESP_GATTC_OPEN_EVT: {
 			m_conn_id = evtParam->open.conn_id;
-			if (m_pClientCallbacks != nullptr) {
-				m_pClientCallbacks->onConnect(this);
-			}
 			if (evtParam->open.status == ESP_GATT_OK) {
 				m_isConnected = true;   // Flag us as connected.
+				if (m_pClientCallbacks != nullptr) {
+					m_pClientCallbacks->onConnect(this);
+				}
+			} else {
+				ESP_LOGE("","Failed to connect, status=%s", GeneralUtils::errorToString(evtParam->open.status));
 			}
 			m_semaphoreOpenEvt.give(evtParam->open.status);
 			break;
@@ -233,17 +232,19 @@ void BLEClient::gattClientEventHandler(
 		} // ESP_GATTC_REG_EVT
 
 		case ESP_GATTC_CFG_MTU_EVT:
+			if (evtParam->cfg_mtu.conn_id != getConnId()) break;
 			if(evtParam->cfg_mtu.status != ESP_GATT_OK) {
-				ESP_LOGE(LOG_TAG,"Config mtu failed");
+				ESP_LOGE("","Config mtu failed");
 			}
 			m_mtu = evtParam->cfg_mtu.mtu;
 			break;
 
 		case ESP_GATTC_CONNECT_EVT: {
-			BLEDevice::updatePeerDevice(this, true, m_gattc_if);
+			if (evtParam->connect.conn_id != getConnId()) break;
+			BLEDevice::updatePeerDevice(this, true, m_appId);
 			esp_err_t errRc = esp_ble_gattc_send_mtu_req(gattc_if, evtParam->connect.conn_id);
 			if (errRc != ESP_OK) {
-				ESP_LOGE(LOG_TAG, "esp_ble_gattc_send_mtu_req: rc=%d %s", errRc, GeneralUtils::errorToString(errRc));
+				ESP_LOGE("","esp_ble_gattc_send_mtu_req: rc=%d %s", errRc, GeneralUtils::errorToString(errRc));
 			}
 #ifdef CONFIG_BLE_SMP_ENABLE   // Check that BLE SMP (security) is configured in make menuconfig
 			if(BLEDevice::m_securityLevel){
@@ -261,19 +262,20 @@ void BLEClient::gattClientEventHandler(
 		// - uint16_t          conn_id
 		//
 		case ESP_GATTC_SEARCH_CMPL_EVT: {
+			if (evtParam->search_cmpl.conn_id != getConnId()) break;
 			esp_ble_gattc_cb_param_t* p_data = (esp_ble_gattc_cb_param_t*)evtParam;
 			if (p_data->search_cmpl.status != ESP_GATT_OK){
-				ESP_LOGE(LOG_TAG, "search service failed, error status = %x", p_data->search_cmpl.status);
+				ESP_LOGE("","search service failed, error status = %x", p_data->search_cmpl.status);
 				break;
 			}
 #ifndef ARDUINO_ARCH_ESP32
 // commented out just for now to keep backward compatibility			
 			// if(p_data->search_cmpl.searched_service_source == ESP_GATT_SERVICE_FROM_REMOTE_DEVICE) {
-			// 	ESP_LOGI(LOG_TAG, "Get service information from remote device");
+			// 	ESP_LOGI("","Get service information from remote device");
 			// } else if (p_data->search_cmpl.searched_service_source == ESP_GATT_SERVICE_FROM_NVS_FLASH) {
-			// 	ESP_LOGI(LOG_TAG, "Get service information from flash");
+			// 	ESP_LOGI("","Get service information from flash");
 			// } else {
-			// 	ESP_LOGI(LOG_TAG, "unknown service source");
+			// 	ESP_LOGI("","unknown service source");
 			// }
 #endif
 			m_semaphoreSearchCmplEvt.give(0);
@@ -291,6 +293,7 @@ void BLEClient::gattClientEventHandler(
 		// - esp_gatt_id_t srvc_id
 		//
 		case ESP_GATTC_SEARCH_RES_EVT: {
+			if (evtParam->search_res.conn_id != getConnId()) break;
 			BLEUUID uuid = BLEUUID(evtParam->search_res.srvc_id);
 			BLERemoteService* pRemoteService = new BLERemoteService(
 				evtParam->search_res.srvc_id,
@@ -343,9 +346,9 @@ BLEAddress BLEClient::getPeerAddress() {
  * @return The RSSI value.
  */
 int BLEClient::getRssi() {
-	ESP_LOGD(LOG_TAG, ">> getRssi()");
+	ESP_LOGV("",">> getRssi()");
 	if (!isConnected()) {
-		ESP_LOGD(LOG_TAG, "<< getRssi(): Not connected");
+		ESP_LOGV("","<< getRssi(): Not connected");
 		return 0;
 	}
 	// We make the API call to read the RSSI value which is an asynchronous operation.  We expect to receive
@@ -354,11 +357,11 @@ int BLEClient::getRssi() {
 	m_semaphoreRssiCmplEvt.take("getRssi");
 	esp_err_t rc = ::esp_ble_gap_read_rssi(*getPeerAddress().getNative());
 	if (rc != ESP_OK) {
-		ESP_LOGE(LOG_TAG, "<< getRssi: esp_ble_gap_read_rssi: rc=%d %s", rc, GeneralUtils::errorToString(rc));
+		ESP_LOGE("","<< getRssi: esp_ble_gap_read_rssi: rc=%d %s", rc, GeneralUtils::errorToString(rc));
 		return 0;
 	}
 	int rssiValue = m_semaphoreRssiCmplEvt.wait("getRssi");
-	ESP_LOGD(LOG_TAG, "<< getRssi(): %d", rssiValue);
+	ESP_LOGV("","<< getRssi(): %d", rssiValue);
 	return rssiValue;
 } // getRssi
 
@@ -380,7 +383,7 @@ BLERemoteService* BLEClient::getService(const char* uuid) {
  * @throws BLEUuidNotFound
  */
 BLERemoteService* BLEClient::getService(BLEUUID uuid) {
-	ESP_LOGD(LOG_TAG, ">> getService: uuid: %s", uuid.toString().c_str());
+	ESP_LOGV("",">> getService: uuid: %s", uuid.toString().c_str());
 // Design
 // ------
 // We wish to retrieve the service given its UUID.  It is possible that we have not yet asked the
@@ -393,11 +396,11 @@ BLERemoteService* BLEClient::getService(BLEUUID uuid) {
 	std::string uuidStr = uuid.toString();
 	for (auto &myPair : m_servicesMap) {
 		if (myPair.first == uuidStr) {
-			ESP_LOGD(LOG_TAG, "<< getService: found the service with uuid: %s", uuid.toString().c_str());
+			ESP_LOGV("","<< getService: found the service with uuid: %s", uuid.toString().c_str());
 			return myPair.second;
 		}
 	} // End of each of the services.
-	ESP_LOGD(LOG_TAG, "<< getService: not found");
+	ESP_LOGV("","<< getService: not found");
 	return nullptr;
 } // getService
 
@@ -416,7 +419,7 @@ std::map<std::string, BLERemoteService*>* BLEClient::getServices() {
  * peer BLE partner to be returned as events.  Each event will be an an instance of ESP_GATTC_SEARCH_RES_EVT
  * and will culminate with an ESP_GATTC_SEARCH_CMPL_EVT when all have been received.
  */
-	ESP_LOGD(LOG_TAG, ">> getServices");
+	ESP_LOGV("",">> getServices");
 // TODO implement retrieving services from cache
 	clearServices(); // Clear any services that may exist.
 
@@ -428,12 +431,12 @@ std::map<std::string, BLERemoteService*>* BLEClient::getServices() {
 
 	m_semaphoreSearchCmplEvt.take("getServices");
 	if (errRc != ESP_OK) {
-		ESP_LOGE(LOG_TAG, "esp_ble_gattc_search_service: rc=%d %s", errRc, GeneralUtils::errorToString(errRc));
+		ESP_LOGE("","esp_ble_gattc_search_service: rc=%d %s", errRc, GeneralUtils::errorToString(errRc));
 		return &m_servicesMap;
 	}
 	// If sucessfull, remember that we now have services.
 	m_haveServices = (m_semaphoreSearchCmplEvt.wait("getServices") == 0);
-	ESP_LOGD(LOG_TAG, "<< getServices");
+	ESP_LOGV("","<< getServices");
 	return &m_servicesMap;
 } // getServices
 
@@ -445,9 +448,9 @@ std::map<std::string, BLERemoteService*>* BLEClient::getServices() {
  * @throws BLEUuidNotFound
  */
 std::string BLEClient::getValue(BLEUUID serviceUUID, BLEUUID characteristicUUID) {
-	ESP_LOGD(LOG_TAG, ">> getValue: serviceUUID: %s, characteristicUUID: %s", serviceUUID.toString().c_str(), characteristicUUID.toString().c_str());
+	ESP_LOGV("",">> getValue: serviceUUID: %s, characteristicUUID: %s", serviceUUID.toString().c_str(), characteristicUUID.toString().c_str());
 	std::string ret = getService(serviceUUID)->getCharacteristic(characteristicUUID)->readValue();
-	ESP_LOGD(LOG_TAG, "<<getValue");
+	ESP_LOGV("","<<getValue");
 	return ret;
 } // getValue
 
@@ -461,7 +464,7 @@ std::string BLEClient::getValue(BLEUUID serviceUUID, BLEUUID characteristicUUID)
 void BLEClient::handleGAPEvent(
 		esp_gap_ble_cb_event_t  event,
 		esp_ble_gap_cb_param_t* param) {
-	ESP_LOGD(LOG_TAG, "BLEClient ... handling GAP event!");
+	ESP_LOGD("","BLEClient ... handling GAP event!");
 	switch (event) {
 		//
 		// ESP_GAP_BLE_READ_RSSI_COMPLETE_EVT
@@ -508,9 +511,9 @@ void BLEClient::setClientCallbacks(BLEClientCallbacks* pClientCallbacks) {
  * @throws BLEUuidNotFound
  */
 void BLEClient::setValue(BLEUUID serviceUUID, BLEUUID characteristicUUID, std::string value) {
-	ESP_LOGD(LOG_TAG, ">> setValue: serviceUUID: %s, characteristicUUID: %s", serviceUUID.toString().c_str(), characteristicUUID.toString().c_str());
+	ESP_LOGV("",">> setValue: serviceUUID: %s, characteristicUUID: %s", serviceUUID.toString().c_str(), characteristicUUID.toString().c_str());
 	getService(serviceUUID)->getCharacteristic(characteristicUUID)->writeValue(value);
-	ESP_LOGD(LOG_TAG, "<< setValue");
+	ESP_LOGV("","<< setValue");
 } // setValue
 
 uint16_t BLEClient::getMTU() {
@@ -522,15 +525,14 @@ uint16_t BLEClient::getMTU() {
  * @return A string representation of this client.
  */
 std::string BLEClient::toString() {
-	std::ostringstream ss;
-	ss << "peer address: " << m_peerAddress.toString();
-	ss << "\nServices:\n";
+	std::string res = "peer address: " + m_peerAddress.toString();
+	res += "\nServices:\n";
 	for (auto &myPair : m_servicesMap) {
-		ss << myPair.second->toString() << "\n";
+		res += myPair.second->toString() + "\n";
 	  // myPair.second is the value
 	}
-	return ss.str();
+	return res;
 } // toString
 
 
-#endif // CONFIG_BT_ENABLED
+#endif // CONFIG_BLUEDROID_ENABLED

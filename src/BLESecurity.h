@@ -8,7 +8,7 @@
 #ifndef COMPONENTS_CPP_UTILS_BLESECURITY_H_
 #define COMPONENTS_CPP_UTILS_BLESECURITY_H_
 #include "sdkconfig.h"
-#if defined(CONFIG_BT_ENABLED)
+#if defined(CONFIG_BLUEDROID_ENABLED)
 
 #include <esp_gap_ble_api.h>
 
@@ -21,6 +21,7 @@ public:
 	void setInitEncryptionKey(uint8_t init_key);
 	void setRespEncryptionKey(uint8_t resp_key);
 	void setKeySize(uint8_t key_size = 16);
+	void setStaticPIN(uint32_t pin);
 	static char* esp_key_type_to_str(esp_ble_key_type_t key_type);
 
 private:
@@ -45,28 +46,28 @@ public:
 	 * It requires that our device is capable to input 6-digits code by end user
 	 * @return Return 6-digits integer value from input device
 	 */
-	virtual uint32_t onPassKeyRequest() = 0;
+	virtual uint32_t onPassKeyRequest() { return 123456; }
 
 	/**
 	 * @brief Provide us 6-digits code to perform authentication.
 	 * It requires that our device is capable to display this code to end user
 	 * @param
 	 */
-	virtual void onPassKeyNotify(uint32_t pass_key) = 0;
+	virtual void onPassKeyNotify(uint32_t pass_key) {}
 
 	/**
 	 * @brief Here we can make decision if we want to let negotiate authorization with peer device or not
 	 * return Return true if we accept this peer device request
 	 */
 
-	virtual bool onSecurityRequest() = 0 ;
+	virtual bool onSecurityRequest() { return true; }
 	/**
 	 * Provide us information when authentication process is completed
 	 */
-	virtual void onAuthenticationComplete(esp_ble_auth_cmpl_t) = 0;
+	virtual void onAuthenticationComplete(esp_ble_auth_cmpl_t) {}
 
-	virtual bool onConfirmPIN(uint32_t pin) = 0;
+	virtual bool onConfirmPIN(uint32_t pin) { return true; }
 }; // BLESecurityCallbacks
 
-#endif // CONFIG_BT_ENABLED
+#endif // CONFIG_BLUEDROID_ENABLED
 #endif // COMPONENTS_CPP_UTILS_BLESECURITY_H_
